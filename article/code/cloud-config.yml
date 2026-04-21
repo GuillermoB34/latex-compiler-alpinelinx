@@ -1,0 +1,53 @@
+#cloud-config
+package_update: true
+package_upgrade: true 
+
+packages:
+   - curl
+   - ca-certificates
+   - git
+   
+users:
+  - default
+  - name: debian    
+    
+write_files:
+  - encoding: utf8 
+    owner: debian:debian
+    path: /home/debian/build/dockerfile
+    content: |
+              FROM maven:3.9.12-eclipse-temurin-11-alpine AS compiler 
+              RUN apk update && apk add --no-cache git && apk add --no-cache ca-certificates
+              WORKDIR /APP
+              RUN git clone https://routerdi1315.uv.es:10000/public/servicio-cache.git \
+                  && cd servicio-cache \
+                  && mvn clean package
+                  
+              ENV FICHERO_JAR=/APP/servicio-cache/target/cache-1.0.jar
+              RUN jdeps --ignore-missing-deps -q --recursive --multi-release 25 --print-module-deps \ 
+              --class-path 'BOOT-INF/lib/*' ${FICHERO_JAR} > /tmp/deps.info
+                  
+              RUN jlink --add-modules $(cat /tmp/deps.info),jdk.crypto.ec \
+                  --strip-debug \
+                  --compress 2 \
+                  --no-header-files \
+                  --no-man-pages \
+                  --output /tmp/minimal_jre
+                  
+              FROM alpine:3.23.3 
+              ENV JAVA_HOME=/opt/java/jre
+              ENV PATH=$JAVA_HOME/bin:$PATH
+              WORKDIR /app-workspace
+              COPY --from=compiler /tmp/minimal_jre ${JAVA_HOME}
+              WORKDIR /APP
+              COPY --from=compiler /APP/servicio-cache/target/cache-1.0.jar .
+              CMD ["java", "-jar","cache-1.0.jar"]            
+runcmd:
+   - curl -fsSL https://get.docker.com -o install-docker.sh
+   - chmod +x install-docker.sh
+   - sh install-docker.sh 
+   - groupadd docker
+   - usermod -aG docker debian
+   - cd /home/debian/build/
+   - docker build -t minimal-java:1.0 .
+   - docker run -d --name minimal-java -p 8080:8080 minimal-java:1.0
